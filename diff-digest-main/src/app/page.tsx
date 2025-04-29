@@ -1,4 +1,5 @@
 "use client"; // Mark as a Client Component
+import ReactMarkdown from "react-markdown";
 
 import { useState } from "react";
 
@@ -18,6 +19,52 @@ interface ApiResponse {
   perPage: number;
 }
 
+async function generateNotes(
+  diff: string,
+  onChunk: (chunk: string) => void
+): Promise<void> {
+  const response = await fetch("/api/sample-diffs/notes-generator", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ diff }),
+  });
+
+  if (!response.body) {
+    throw new Error("No response body");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let done = false;
+
+  while (!done) {
+    const { value, done: doneReading } = await reader.read();
+    done = doneReading;
+    if (value) {
+      const chunkValue = decoder.decode(value);
+      const lines = chunkValue.split("\n");
+
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const jsonString = line.slice(6).trim();
+          if (jsonString === "[DONE]") {
+            return;
+          }
+          try {
+            const parsed = JSON.parse(jsonString);
+            const content = parsed.choices?.[0]?.delta?.content;
+            if (content) {
+              onChunk(content);
+            }
+          } catch (e) {
+            console.error("Error parsing OpenAI stream chunk:", e);
+          }
+        }
+      }
+    }
+  }
+}
+
 export default function Home() {
   const [diffs, setDiffs] = useState<DiffItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -25,6 +72,11 @@ export default function Home() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [nextPage, setNextPage] = useState<number | null>(null);
   const [initialFetchDone, setInitialFetchDone] = useState<boolean>(false);
+
+  const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [developerNotes, setDeveloperNotes] = useState<string>("");
+  const [marketingNotes, setMarketingNotes] = useState<string>("");
+  const [currentPR, setCurrentPR] = useState<DiffItem | null>(null);
 
   const fetchDiffs = async (page: number) => {
     setIsLoading(true);
@@ -45,9 +97,8 @@ export default function Home() {
         throw new Error(errorMsg);
       }
       const data: ApiResponse = await response.json();
-
-      setDiffs((prevDiffs) =>
-        page === 1 ? data.diffs : [...prevDiffs, ...data.diffs]
+      setDiffs((prev) =>
+        page === 1 ? data.diffs : [...prev, ...data.diffs]
       );
       setCurrentPage(data.currentPage);
       setNextPage(data.nextPage);
@@ -63,6 +114,8 @@ export default function Home() {
 
   const handleFetchClick = () => {
     setDiffs([]); // Clear existing diffs when fetching the first page again
+    setDeveloperNotes("");
+    setMarketingNotes("");
     fetchDiffs(1);
   };
 
@@ -72,17 +125,62 @@ export default function Home() {
     }
   };
 
+  const handleGenerateNotes = (pr: DiffItem) => {
+    setDeveloperNotes("");
+    setMarketingNotes("");
+    setLoadingId(pr.id);
+    setCurrentPR(pr);
+
+    let buffer = "";
+
+    generateNotes(pr.diff, (chunk) => {
+      buffer += chunk;
+    })
+      .then(() => {
+        const devMatch = buffer.match(
+          /Developer Notes:([\s\S]*?)(?:Marketing Notes:|$)/
+        );
+        const bizMatch = buffer.match(
+          /Marketing Notes:([\s\S]*)/
+        );
+        if (devMatch && devMatch[1]) {
+          let devNotes = devMatch[1].trim();
+          {/* remove random characters - chat sometimes adds random separator characters */}
+          devNotes = devNotes.replace(/\n##+\s*$/g, "").trim();
+          setDeveloperNotes(devNotes);
+        }
+        if (bizMatch && bizMatch[1]) {
+          let bizNotes = bizMatch[1].trim();
+          {/* same as above */}
+          bizNotes = bizNotes.replace(/\n##+\s*$/g, "").trim();
+          setMarketingNotes(bizNotes);
+        }
+      })
+      .catch((err) => {
+        console.error("Error generating notes:", err);
+        setDeveloperNotes("Failed to generate notes.");
+      })
+      .finally(() => {
+        setLoadingId(null);
+      });
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      alert("Copied to clipboard!");
+    });
+  };
+
   return (
     <main className="flex min-h-screen flex-col items-center p-12 sm:p-24">
       <h1 className="text-4xl font-bold mb-12">Diff Digest ✍️</h1>
 
-      <div className="w-full max-w-4xl">
-        {/* Controls Section */}
-        <div className="mb-8 flex space-x-4">
+      <div className="w-full max-w-4xl space-y-8">
+        <div className="flex space-x-4">
           <button
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50"
             onClick={handleFetchClick}
             disabled={isLoading}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
           >
             {isLoading && currentPage === 1
               ? "Fetching..."
@@ -90,66 +188,125 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Results Section */}
-        <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-6 min-h-[300px] bg-gray-50 dark:bg-gray-800">
-          <h2 className="text-2xl font-semibold mb-4">Merged Pull Requests</h2>
+        <div className="border border-gray-300 dark:border-gray-700 rounded-lg p-6 bg-gray-50 dark:bg-gray-800">
+          <h2 className="text-2xl font-semibold mb-4">
+            Merged Pull Requests
+          </h2>
 
           {error && (
-            <div className="text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/30 p-3 rounded mb-4">
+            <div className="text-red-600 bg-red-100 p-3 rounded mb-4">
               Error: {error}
             </div>
           )}
 
           {!initialFetchDone && !isLoading && (
-            <p className="text-gray-600 dark:text-gray-400">
-              Click the button above to fetch the latest merged pull requests
-              from the repository.
-            </p>
-          )}
-
-          {initialFetchDone && diffs.length === 0 && !isLoading && !error && (
-            <p className="text-gray-600 dark:text-gray-400">
-              No merged pull requests found or fetched.
+            <p className="text-gray-600">
+              Click "Fetch Latest Diffs" to load merged pull requests.
             </p>
           )}
 
           {diffs.length > 0 && (
-            <ul className="space-y-3 list-disc list-inside">
+            <ul className="space-y-4">
               {diffs.map((item) => (
-                <li key={item.id} className="text-gray-800 dark:text-gray-200">
-                  <a
-                    href={item.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 dark:text-blue-400 hover:underline"
+                <li
+                  key={item.id}
+                  className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center bg-white dark:bg-gray-700 p-4 rounded"
+                >
+                  <div>
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline font-medium"
+                    >
+                      PR #{item.id}
+                    </a>
+                    <span className="ml-2 text-gray-800">
+                      {item.description}
+                    </span>
+                  </div>
+                  <button
+                    className="mt-2 sm:mt-0 px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                    onClick={() => handleGenerateNotes(item)}
+                    disabled={loadingId !== null}
                   >
-                    PR #{item.id}:
-                  </a>
-                  <span className="ml-2">{item.description}</span>
-                  {/* We won't display the full diff here, just the description */}
+                    {loadingId === item.id ? "Generating..." : "Generate Notes"}
+                  </button>
                 </li>
               ))}
             </ul>
           )}
 
           {isLoading && currentPage > 1 && (
-            <p className="text-gray-600 dark:text-gray-400 mt-4">
-              Loading more...
+            <p className="text-gray-600 mt-4">
+              Loading more pull requests...
             </p>
           )}
 
           {nextPage && !isLoading && (
-            <div className="mt-6">
+            <div className="mt-6 flex justify-center">
               <button
-                className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors disabled:opacity-50"
                 onClick={handleLoadMoreClick}
-                disabled={isLoading}
+                className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors"
               >
                 Load More (Page {nextPage})
               </button>
             </div>
           )}
         </div>
+
+        {/* all notes */}
+
+        {developerNotes && (
+          <div className="bg-white p-6 rounded shadow space-y-4">
+            {/* pr number and name */}
+            {currentPR && (
+              <div className="text-center space-y-2">
+                <h2 className="text-2xl font-bold">
+                  Release Notes for{" "}
+                  <a
+                    href={currentPR.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline"
+                  >
+                    PR #{currentPR.id}
+                  </a>
+                </h2>
+                <p className="text-lg text-gray-600 dark:text-gray-400">{currentPR.description}</p>
+              </div>
+            )}
+
+            {/* dev notes */}
+            <div>
+              <h2 className="text-2xl font-bold mb-2">Developer Notes</h2>
+              <div className="bg-gray-100 dark:bg-gray-900 p-4 rounded prose dark:prose-invert">
+                <ReactMarkdown>{developerNotes}</ReactMarkdown>
+              </div>
+              <button
+                onClick={() => copyToClipboard(developerNotes)}
+                className="mt-2 px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700"
+              >
+                Copy Developer Notes
+              </button>
+            </div>
+
+
+            {/* marketing notes */}
+            <div>
+              <h2 className="text-2xl font-bold mb-2">Marketing Notes</h2>
+              <div className="bg-gray-100 dark:bg-gray-900 p-4 rounded prose dark:prose-invert">
+                <ReactMarkdown>{marketingNotes}</ReactMarkdown>
+              </div>
+              <button
+                onClick={() => copyToClipboard(marketingNotes)}
+                className="mt-2 px-3 py-1 bg-purple-600 text-white rounded hover:bg-purple-700"
+              >
+                Copy Marketing Notes
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </main>
   );
