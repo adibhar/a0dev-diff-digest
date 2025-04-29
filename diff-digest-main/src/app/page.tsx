@@ -80,6 +80,7 @@ export default function Home() {
   const [developerNotes, setDeveloperNotes] = useState<string>("");
   const [marketingNotes, setMarketingNotes] = useState<string>("");
   const [currentPR, setCurrentPR] = useState<DiffItem | null>(null);
+  
 
   const fetchDiffs = async (page: number) => {
     setIsLoading(true);
@@ -128,45 +129,65 @@ export default function Home() {
     }
   };
 
-  const handleGenerateNotes = (pr: DiffItem) => {
-    setDeveloperNotes("");
-    setMarketingNotes("");
-    setLoadingId(pr.id);
-    setCurrentPR(pr);
+  const MAX_MEANINGFUL_LINES = 300; 
+  // Assuming each line has 10 tokens, allows for 3000 token input. 
+  // Probably the most meaningful bound for input, since tokens too large won't go through. (total tokens in 
+  // query need to be < ~8000)
 
-    let buffer = "";
+const handleGenerateNotes = (pr: DiffItem) => {
+  setDeveloperNotes("");
+  setMarketingNotes("");
+  setLoadingId(pr.id);
+  setCurrentPR(pr);
 
-    generateNotes(pr.diff, (chunk) => {
-      buffer += chunk;
+  //console.log("Original diff size:", pr.diff.length);
+
+  const usefulLines = pr.diff
+    .split("\n")
+    .filter(line =>
+      (line.startsWith("+") || line.startsWith("-")) &&
+      !line.startsWith("+++") &&
+      !line.startsWith("---")
+    );
+
+  const trimmedDiff = usefulLines.slice(0, MAX_MEANINGFUL_LINES).join("\n");
+
+  //console.log("Trimmed useful diff size:", trimmedDiff.length);
+
+  let buffer = "";
+
+  generateNotes(trimmedDiff, (chunk) => {
+    buffer += chunk;
+  })
+    .then(() => {
+      const devMatch = buffer.match(/Developer Notes:([\s\S]*?)(?:Marketing Notes:|$)/);
+      const bizMatch = buffer.match(/Marketing Notes:([\s\S]*)/);
+
+      if (devMatch && devMatch[1]) {
+        let devNotes = devMatch[1].trim();
+        devNotes = devNotes.replace(/\n##+\s*$/g, "").trim();
+        setDeveloperNotes(devNotes);
+      } else {
+        setDeveloperNotes("No developer notes generated.");
+      }
+
+      if (bizMatch && bizMatch[1]) {
+        let bizNotes = bizMatch[1].trim();
+        bizNotes = bizNotes.replace(/\n##+\s*$/g, "").trim();
+        setMarketingNotes(bizNotes);
+      } else {
+        setMarketingNotes("No marketing notes generated.");
+      }
     })
-      .then(() => {
-        const devMatch = buffer.match(
-          /Developer Notes:([\s\S]*?)(?:Marketing Notes:|$)/
-        );
-        const bizMatch = buffer.match(
-          /Marketing Notes:([\s\S]*)/
-        );
-        if (devMatch && devMatch[1]) {
-          let devNotes = devMatch[1].trim();
-          {/* remove random characters - chat sometimes adds random separator characters */}
-          devNotes = devNotes.replace(/\n##+\s*$/g, "").trim();
-          setDeveloperNotes(devNotes);
-        }
-        if (bizMatch && bizMatch[1]) {
-          let bizNotes = bizMatch[1].trim();
-          {/* same as above */}
-          bizNotes = bizNotes.replace(/\n##+\s*$/g, "").trim();
-          setMarketingNotes(bizNotes);
-        }
-      })
-      .catch((err) => {
-        console.error("Error generating notes:", err);
-        setDeveloperNotes("Failed to generate notes.");
-      })
-      .finally(() => {
-        setLoadingId(null);
-      });
-  };
+    .catch((err) => {
+      console.error("Error generating notes:", err);
+      setDeveloperNotes("Failed to generate notes.");
+    })
+    .finally(() => {
+      setLoadingId(null);
+    });
+};
+
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text).then(() => {
