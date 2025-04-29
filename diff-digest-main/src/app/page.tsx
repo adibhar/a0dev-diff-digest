@@ -23,7 +23,7 @@ async function generateNotes(
   diff: string,
   onChunk: (chunk: string) => void
 ): Promise<void> {
-  const response = await fetch("/api/sample-diffs/notes-generator", {
+  const response = await fetch("/api/notes-generator", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ diff }),
