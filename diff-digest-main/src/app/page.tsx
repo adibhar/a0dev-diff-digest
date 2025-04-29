@@ -35,21 +35,23 @@ async function generateNotes(
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  let done = false;
+  let buffer = "";
 
+  let done = false;
   while (!done) {
     const { value, done: doneReading } = await reader.read();
     done = doneReading;
     if (value) {
-      const chunkValue = decoder.decode(value);
-      const lines = chunkValue.split("\n");
+      buffer += decoder.decode(value);
+
+      let lines = buffer.split("\n");
+
+      buffer = lines.pop() ?? "";
 
       for (const line of lines) {
         if (line.startsWith("data: ")) {
           const jsonString = line.slice(6).trim();
-          if (jsonString === "[DONE]") {
-            return;
-          }
+          if (jsonString === "[DONE]") return;
           try {
             const parsed = JSON.parse(jsonString);
             const content = parsed.choices?.[0]?.delta?.content;
@@ -64,6 +66,7 @@ async function generateNotes(
     }
   }
 }
+
 
 export default function Home() {
   const [diffs, setDiffs] = useState<DiffItem[]>([]);
