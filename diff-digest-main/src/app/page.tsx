@@ -44,7 +44,7 @@ async function generateNotes(
     if (value) {
       buffer += decoder.decode(value);
 
-      let lines = buffer.split("\n");
+      const lines = buffer.split("\n");
 
       buffer = lines.pop() ?? "";
 
