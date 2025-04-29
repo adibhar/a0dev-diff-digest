@@ -201,7 +201,7 @@ export default function Home() {
 
           {!initialFetchDone && !isLoading && (
             <p className="text-gray-600">
-              Click "Fetch Latest Diffs" to load merged pull requests.
+              Click &quot;Fetch Latest Diffs&quot; to load merged pull requests.
             </p>
           )}
 
